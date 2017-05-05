@@ -20,15 +20,21 @@ import jinja2
 
 from google.appengine.ext import db
 
+template_dir = os.path.join(os.path.dirname(__file__), 'templates')
+jinja_env = jinja2.Environment(loader = jinja2.FileSystemLoader(template_dir), autoescape = True)
 
-template_dir = os.path.join(os.path.dirname(__file__), "templates")
-jinja_env = jinja2.Environment(loader = jinja2.FileSystemLoader(template_dir),
-                               autoescape = True)
+
+
+def get_posts(limit, offset):
+    sql_string = ("SELECT * FROM Post ORDER BY created DESC LIMIT " + str(limit)
+        + " OFFSET " + str(offset))
+    posts = db.GqlQuery(sql_string)
+    return posts
 
 
 class Handler(webapp2.RequestHandler):
     def write(self, *a, **kw):
-        self.response.write(*a, **kw)
+        self.response.out.write(*a, **kw)
 
     def render_str(self, template, **params):
         t = jinja_env.get_template(template)
@@ -37,69 +43,59 @@ class Handler(webapp2.RequestHandler):
     def render(self, template, **kw):
         self.write(self.render_str(template, **kw))
 
-
-class Blogpost(db.Model):
+class Post(db.Model):
     title = db.StringProperty(required = True)
-    blogpost = db.TextProperty(required = True)
+    body = db.TextProperty(required = True)
     created = db.DateTimeProperty(auto_now_add = True)
 
-
-class FrontPage(Handler):
-    def render_form(self, title="", blogpost="", error=""):
-        blogp= db.GqlQuery("SELECT * FROM Blogpost ORDER BY created DESC LIMIT 5")
-
-        self.render("newpost.html", title=title, blogpost=blogpost, error=error,
-                    blogp = blogp)
-#redirect to the blog handle once post
+class MainPage(Handler):
     def get(self):
-        self.response.write("blog")
+        self.redirect('/blog')
 
-
-class Blog(Handler):
+class BlogPage(Handler):
     def get(self):
-        query = Blogpost.all().order("created")
-        writenew_posts = query.fetch(limit = 5)
+        more = "N"
+        page = self.request.get("page")
 
-        self.render("blog.html", blogp = writenew_posts)
-
-class Newpost(Handler):
-    def get(self):
-        t = jinja_env.get_template("newpost.html")
-        content = t.render()
-        self.response.write(content)
-
-    def post(self):
-        write_title = self.request.get("title")
-        write_blogpost = self.request.get("body")
-
-        if write_title and write_blogpost:
-            b = Blogpost(title = write_title, blogpost = write_blogpost)
-            b.put()
-
-            self.redirect('/blog/')
+        if page == "":
+            page = 1
         else:
-            error = " Please fill in both title and post entry, both are required!"
-            t = jinja_env.get_template("newpost.html")
-            content = t.render( title = write_title,
-                                entry = write_blogpost,
-                                error=error)
-            self.response.write(content)
+            page = int(page)
+
+        posts = get_posts(5, (page - 1) * 5)
+
+        if(posts.count(limit = 5, offset=(page*5)) > 0):
+            more = "Y"
+        self.render("index.html", posts=posts, error="", more=more, page=page)
+
+class NewPost(Handler):
+     def get(self):
+         self.render("add.html", title="", body="", error="")
+
+     def post(self):
+         title = self.request.get("title")
+         body = self.request.get("body")
+
+         if title and body :
+             newpost = Post(title=title, body=body)
+             newpost.put()
+             blog_post_id = str(newpost.key().id())
+             self.redirect("/blog/" + blog_post_id)
+         else:
+             error = "Please enter both title and body"
+             self.render("add.html", title=title, body=body, error=error)
 
 class ViewPostHandler(Handler):
-    def get(self, id):
-        post = Blogpost.get_by_id(int(id))
-        if post:
-            t = jinja_env.get_template("permalink.html")
-            content = t.render(post=post)
-            self.response.write(content)
-        else:
-            self.response.write("No post here.")
+     def get(self, id):
+        a = Post.get_by_id(int(id))
+        self.render("permalink.html", post = a)
+
+
+
 
 app = webapp2.WSGIApplication([
-    ('/', FrontPage),
-    ('/blog/newpost', Newpost),
-    ('/blog/newpost/', Newpost),
-    ('/blog', Blog),
-    ('/blog/', Blog),
-    webapp2.Route('/blog/<id:\d+>', ViewPostHandler)],
-    debug=True)
+      ('/', MainPage),
+      ('/blog', BlogPage),
+      ('/newpost', NewPost),
+      webapp2.Route('/blog/<id:\d+>', ViewPostHandler),
+], debug=True)
